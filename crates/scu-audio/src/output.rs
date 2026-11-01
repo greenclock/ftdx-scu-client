@@ -100,13 +100,13 @@ impl AudioOutput {
             Some(name) => find_output_device(&host, name)?,
             None => host.default_output_device().ok_or(OutputError::NoDevice)?,
         };
-        let device_name = device.name().unwrap_or_else(|_| "unknown".into());
+        let device_name = device.to_string();
 
         let supported = choose_config(&device)?;
         let sample_format = supported.sample_format();
         let config: StreamConfig = supported.into();
         let out_channels = config.channels;
-        let out_rate = config.sample_rate.0;
+        let out_rate = config.sample_rate;
 
         let capacity = (out_rate as usize) * (out_channels as usize) * 2;
         let (mut producer, consumer) = HeapRb::<f32>::new(capacity).split();
@@ -229,7 +229,7 @@ impl AudioOutput {
     pub fn devices() -> Vec<String> {
         let host = cpal::default_host();
         match host.output_devices() {
-            Ok(devices) => devices.filter_map(|device| device.name().ok()).collect(),
+            Ok(devices) => devices.map(|device| device.to_string()).collect(),
             Err(_) => Vec::new(),
         }
     }
@@ -240,7 +240,7 @@ fn find_output_device(host: &cpal::Host, name: &str) -> Result<cpal::Device, Out
         .output_devices()
         .map_err(|e| OutputError::Config(e.to_string()))?;
     for device in devices {
-        if device.name().ok().as_deref() == Some(name) {
+        if device.to_string() == name {
             return Ok(device);
         }
     }
@@ -251,8 +251,8 @@ fn choose_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, O
     // Prefer a config that runs at the source rate (16 kHz) to avoid resampling.
     if let Ok(ranges) = device.supported_output_configs() {
         for range in ranges {
-            if range.min_sample_rate().0 <= 16_000 && 16_000 <= range.max_sample_rate().0 {
-                return Ok(range.with_sample_rate(cpal::SampleRate(16_000)));
+            if range.min_sample_rate() <= 16_000 && 16_000 <= range.max_sample_rate() {
+                return Ok(range.with_sample_rate(16_000));
             }
         }
     }
@@ -266,7 +266,7 @@ fn build_stream<T, C>(
     config: &StreamConfig,
     mut consumer: C,
     control: Arc<Control>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+    err_fn: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<Stream, OutputError>
 where
     T: SizedSample + FromSample<f32>,
@@ -275,7 +275,7 @@ where
     let mut last_flush = control.flush_gen.load(Ordering::Relaxed);
     device
         .build_output_stream(
-            config,
+            *config,
             move |data: &mut [T], _| {
                 let flush_gen = control.flush_gen.load(Ordering::Relaxed);
                 if flush_gen != last_flush {

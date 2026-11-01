@@ -97,7 +97,7 @@ impl MicInput {
             Some(name) => find_input_device(&host, name)?,
             None => host.default_input_device().ok_or(InputError::NoDevice)?,
         };
-        let device_name = device.name().unwrap_or_else(|_| "unknown".into());
+        let device_name = device.to_string();
 
         let supported = device
             .default_input_config()
@@ -105,7 +105,7 @@ impl MicInput {
         let sample_format = supported.sample_format();
         let stream_config: StreamConfig = supported.into();
         let channels = stream_config.channels;
-        let rate = stream_config.sample_rate.0;
+        let rate = stream_config.sample_rate;
 
         // ~0.5 s of headroom; the worker drains continuously.
         let capacity = ((rate as usize * channels as usize) / 2).max(1);
@@ -189,7 +189,7 @@ impl MicInput {
     pub fn devices() -> Vec<String> {
         let host = cpal::default_host();
         match host.input_devices() {
-            Ok(devices) => devices.filter_map(|d| d.name().ok()).collect(),
+            Ok(devices) => devices.map(|d| d.to_string()).collect(),
             Err(_) => Vec::new(),
         }
     }
@@ -209,7 +209,7 @@ fn find_input_device(host: &cpal::Host, name: &str) -> Result<cpal::Device, Inpu
         .input_devices()
         .map_err(|e| InputError::Config(e.to_string()))?;
     for device in devices {
-        if device.name().ok().as_deref() == Some(name) {
+        if device.to_string() == name {
             return Ok(device);
         }
     }
@@ -220,7 +220,7 @@ fn build_input_stream<T, P>(
     device: &cpal::Device,
     config: &StreamConfig,
     mut producer: P,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+    err_fn: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<Stream, InputError>
 where
     T: SizedSample,
@@ -229,7 +229,7 @@ where
 {
     device
         .build_input_stream(
-            config,
+            *config,
             move |data: &[T], _| {
                 for &sample in data {
                     let value = f32::from_sample(sample);
